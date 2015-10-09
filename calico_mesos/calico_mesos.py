@@ -319,6 +319,9 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
 
                 calicoctl('profile', profile_id, 'rule', 'add', 'inbound', tag_rule)
 
+    # Add a rule to allow all outbound access.
+    calicoctl('profile', profile_id, 'rule', 'add', 'outbound', 'allow')
+
     # Set the profile ID on the endpoint
     _log.info("Adding container %s to profile %s", container_id, profile_id)
     ep.profile_ids = [ profile_id ]
