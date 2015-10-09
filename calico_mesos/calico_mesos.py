@@ -289,10 +289,10 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
         rules = ['allow']
 
     # Add a rule to allow inbound from the slave.
-    #host_net = str(_get_host_ip_net())
-    #_log.info("adding accept rule for %s" % host_net)
-    #calicoctl('profile', profile_id, 'rule', 'add', 'inbound',
-    #               'allow', 'from', 'cidr'
+    host_net = str(_get_host_ip_net())
+    _log.info("adding accept rule for %s" % host_net)
+    calicoctl('profile', profile_id, 'rule', 'add', 'inbound',
+              'allow', 'from', 'cidr', host_net)
 
     # Now handle each rule, in turn.
     for rule in rules:
