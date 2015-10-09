@@ -229,6 +229,10 @@ def isolate(args):
     _isolate(hostname, pid, container_id, ipv4_addrs_validated, ipv6_addrs_validated, netgroups, labels)
     _log.debug("Request completed.")
 
+def calicolog(*args):
+    _log.info('calicolog')
+    for arg in args:
+        _log.info('arg: %r' % arg)
 
 def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules, labels):
     """
@@ -272,7 +276,9 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
 
     # Compute unique profile ID for this endpoint, and create or reset it.
     profile_id = 'profile-' + container_id
+    calicolog('profile', 'remove', profile_id, '--no-check')
     calicoctl('profile', 'remove', profile_id, '--no-check')
+    calicolog('profile', 'add', profile_id)
     calicoctl('profile', 'add', profile_id)
 
     # Separate out the tags from the rules, and add the tags to the profile.
@@ -282,6 +288,7 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
         if tag_rule.startswith('allow') or tag_rule.startswith('deny'):
             rules.append(tag_rule)
         else:
+            calicolog('profile', profile_id, 'tag', 'add', tag_rule)
             calicoctl('profile', profile_id, 'tag', 'add', tag_rule)
             tags.append(tag_rule)
 
@@ -291,6 +298,8 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
     # Add a rule to allow inbound from the slave.
     host_net = str(_get_host_ip_net())
     _log.info("adding accept rule for %s" % host_net)
+    calicolog('profile', profile_id, 'rule', 'add', 'inbound',
+              'allow', 'from', 'cidr', host_net)
     calicoctl('profile', profile_id, 'rule', 'add', 'inbound',
               'allow', 'from', 'cidr', host_net)
 
@@ -301,7 +310,8 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
         # for replacing 'netgroup' with 'tag'.
         if 'netgroup' in rule or 'cidr' in rule or 'public' in tags:
             rule = rule.replace('netgroup', 'tag')
-            calicoctl('profile', profile_id, 'rule', 'add', 'inbound', rule)
+            calicolog('profile', profile_id, 'rule', 'add', 'inbound', rule.split())
+            calicoctl('profile', profile_id, 'rule', 'add', 'inbound', rule.split())
         else:
             # We need to program the rule once for each tag, inserting
             # 'tag <TAG>' in the right place.
@@ -317,9 +327,11 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules,
                 else:
                     tag_rule = rule + ' from tag %s' % tag
 
-                calicoctl('profile', profile_id, 'rule', 'add', 'inbound', tag_rule)
+                calicolog('profile', profile_id, 'rule', 'add', 'inbound', tag_rule.split())
+                calicoctl('profile', profile_id, 'rule', 'add', 'inbound', tag_rule.split())
 
     # Add a rule to allow all outbound access.
+    calicolog('profile', profile_id, 'rule', 'add', 'outbound', 'allow')
     calicoctl('profile', profile_id, 'rule', 'add', 'outbound', 'allow')
 
     # Set the profile ID on the endpoint
