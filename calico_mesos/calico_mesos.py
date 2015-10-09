@@ -24,6 +24,7 @@ import logging
 import logging.handlers
 import traceback
 import re
+import sh
 from subprocess import check_output, CalledProcessError
 from netaddr import IPNetwork
 
@@ -40,6 +41,11 @@ ERROR_MISSING_ARGS = "Missing args"
 datastore = IPAMClient()
 _log = logging.getLogger("CALICOMESOS")
 
+# Get the desired calicoctl location.  By default, we search the PATH for
+# the location of calicoctl, unless overridden by this variable.
+CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', 'calicoctl')
+
+calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
 
 def calico_mesos():
     """
@@ -224,7 +230,7 @@ def isolate(args):
     _log.debug("Request completed.")
 
 
-def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, profiles, labels):
+def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, tags_rules, labels):
     """
     Configure networking for a container.
 
@@ -238,12 +244,12 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, profiles, l
     :param container_id: The container's ID
     :param ipv4_addrs: List of desired IPv4 addresses to be assigned to the endpoint
     :param ipv6_addrs: List of desired IPv6 addresses to be assigned to the endpoint
-    :param profiles: List of desired profiles to be assigned to the endpoint
+    :param tags_rules: List of desired tags and rules to be assigned to the endpoint
     :param labels: TODO
     :return: None
     """
     _log.info("Preparing network for Container with ID %s", container_id)
-    _log.info("IP: %s, Profile %s", ipv4_addrs, profiles)
+    _log.info("IP: %s, Tags/Rules %s", ipv4_addrs, tags_rules)
 
 
     # Exit if the endpoint has already been configured
@@ -252,24 +258,70 @@ def _isolate(hostname, ns_pid, container_id, ipv4_addrs, ipv6_addrs, profiles, l
                                    workload_id=container_id)) == 1:
         raise IsolatorException("This container has already been configured with Calico Networking.")
 
+    # If no tags/rules are explicitly specified, default to just the
+    # tag 'default'.
+    if tags_rules == []:
+        tags_rules = ["default"]
+    _log.info("Assigning Tags/Rules: %s" % tags_rules)
+
     # Create the endpoint
     ep = datastore.create_endpoint(hostname=hostname,
                                    orchestrator_id=ORCHESTRATOR_ID,
                                    workload_id=container_id,
                                    ip_list=ipv4_addrs)
 
-    # Create any profiles in etcd that do not already exist
-    if profiles == []:
-        profiles = ["default"]
-    _log.info("Assigning Profiles: %s" % profiles)
-    for profile in profiles:
-        # Create profile with default rules, if it does not exist
-        if not datastore.profile_exists(profile):
-            _create_profile_with_default_mesos_rules(profile)
+    # Compute unique profile ID for this endpoint, and create or reset it.
+    profile_id = 'profile-' + container_id
+    calicoctl('profile', 'remove', profile_id, '--no-check')
+    calicoctl('profile', 'add', profile_id)
 
-    # Set profiles on the endpoint
-    _log.info("Adding container %s to profile %s", container_id, profile)
-    ep.profile_ids = profiles
+    # Separate out the tags from the rules, and add the tags to the profile.
+    tags = []
+    rules = []
+    for tag_rule in tags_rules:
+        if tag_rule.startswith('allow') or tag_rule.startswith('deny'):
+            rules.append(tag_rule)
+        else:
+            calicoctl('profile', profile_id, 'tag', 'add', tag_rule)
+            tags.append(tag_rule)
+
+    if not rules:
+        rules = ['allow']
+
+    # Add a rule to allow inbound from the slave.
+    #host_net = str(_get_host_ip_net())
+    #_log.info("adding accept rule for %s" % host_net)
+    #calicoctl('profile', profile_id, 'rule', 'add', 'inbound',
+    #               'allow', 'from', 'cidr'
+
+    # Now handle each rule, in turn.
+    for rule in rules:
+        # If the rule mentions an explicit netgroup or CIDR, or if the
+        # tags include 'public', we can program the rule as is, except
+        # for replacing 'netgroup' with 'tag'.
+        if 'netgroup' in rule or 'cidr' in rule or 'public' in tags:
+            rule = rule.replace('netgroup', 'tag')
+            calicoctl('profile', profile_id, 'rule', 'add', 'inbound', rule)
+        else:
+            # We need to program the rule once for each tag, inserting
+            # 'tag <TAG>' in the right place.
+            for tag in tags:
+                if ' from ' in rule:
+                    tag_rule = rule.replace(' from ',
+                                            ' from tag %s ' % tag,
+                                            1)
+                elif ' to ' in rule:
+                    tag_rule = rule.replace(' to ',
+                                            ' from tag %s to ' % tag,
+                                            1)
+                else:
+                    tag_rule = rule + ' from tag %s' % tag
+
+                calicoctl('profile', profile_id, 'rule', 'add', 'inbound', tag_rule)
+
+    # Set the profile ID on the endpoint
+    _log.info("Adding container %s to profile %s", container_id, profile_id)
+    ep.profile_ids = [ profile_id ]
 
     # Call through to complete the network setup matching this endpoint
     try:
@@ -385,7 +437,7 @@ def reserve(args):
 
 def _reserve(hostname, uid, ipv4_addrs, ipv6_addrs):
     """
-    Reserve an IP from the IPAM. 
+    Reserve an IP from the IPAM.
     :param hostname: The host agent which is reserving this IP
     :param uid: A unique ID, which is indexed by the IPAM module and can be
     used to release all addresses with the uid.
