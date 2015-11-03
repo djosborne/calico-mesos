@@ -15,6 +15,7 @@ import sys
 import os
 import errno
 from pycalico import netns
+import pycalico
 from pycalico.ipam import IPAMClient
 from pycalico.datastore import Rules, Rule
 from pycalico.block import AlreadyAssignedError
@@ -28,7 +29,7 @@ from subprocess import check_output, CalledProcessError
 from netaddr import IPNetwork
 import socket
 
-LOGFILE = "/var/log/calico/isolator.log"
+LOGFILE = "/var/log/calico/calico_mesos.log"
 ORCHESTRATOR_ID = "mesos"
 
 ERROR_MISSING_COMMAND      = "Missing command"
@@ -103,6 +104,10 @@ def _setup_logging(logfile):
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(formatter)
     _log.addHandler(handler)
+
+    pycalico_logger = logging.getLogger(pycalico.__name__)
+    pycalico_logger.setLevel(logging.DEBUG)
+    pycalico_logger.addHandler(handler)
 
 
 def _validate_ip_addrs(ip_addrs, ip_version=None):
